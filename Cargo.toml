@@ -1,0 +1,8 @@
+[package]
+name = "tunneldevice"
+version = "0.1.0"
+authors = ["Sascha Grunert <mail@saschagrunert.de>"]
+build = "build.rs"
+
+[build-dependencies]
+bindgen = "0"
