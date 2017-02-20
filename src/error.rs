@@ -1,67 +1,70 @@
-//! Basic error handling mechanisms
-
+//! Everything related to error handling
 use std::error::Error;
-use std::fmt;
+use std::{fmt, io, net};
 
-/// The result type for our device
-pub type DeviceResult<T> = Result<T, Box<Error>>;
+/// Common Tunnel Result type
+pub type TunnelResult<T> = Result<T, TunnelError>;
 
-/// Concrete errors
-struct GitJournalError {
-    description: String,
-    detail: Option<String>,
-    cause: Option<Box<Error + Send>>,
+#[derive(Default)]
+/// The global Error type for wiki
+pub struct TunnelError {
+    /// A further description for the error
+    pub description: String,
+
+    /// The cause for this error
+    pub cause: Option<Box<Error>>,
 }
 
-impl fmt::Display for GitJournalError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.description)?;
-        if let Some(ref s) = self.detail {
-            write!(f, ": {}", s)?;
+/// Representation of an error case
+impl TunnelError {
+    /// Creates a new `TunnelError`
+    pub fn new(description: &str) -> Self {
+        TunnelError {
+            description: description.to_string(),
+            cause: None,
         }
-        Ok(())
     }
 }
 
-impl fmt::Debug for GitJournalError {
+impl fmt::Display for TunnelError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.description)
+    }
+}
+
+impl fmt::Debug for TunnelError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }
 
-impl Error for GitJournalError {
+impl Error for TunnelError {
     fn description(&self) -> &str {
         &self.description
     }
-
-    #[cfg_attr(feature = "cargo-clippy", allow(let_and_return))]
-    fn cause(&self) -> Option<&Error> {
-        self.cause.as_ref().map(|c| {
-            let e: &Error = &**c;
-            e
-        })
-    }
 }
 
-/// Raise an internal error
-pub fn error(error: &str, detail: &str) -> Box<Error> {
-    Box::new(GitJournalError {
-        description: error.to_string(),
-        detail: Some(detail.to_string()),
-        cause: None,
-    })
+macro_rules! from_error {
+    ($($p:ty,)*) => (
+        $(impl From<$p> for TunnelError {
+            fn from(err: $p) -> Self {
+                TunnelError {
+                    description: err.description().to_owned(),
+                    cause: Some(Box::new(err)),
+                }
+            }
+        })*
+    )
 }
 
-pub fn bail(error: &fmt::Display) -> Box<Error> {
-    Box::new(GitJournalError {
-        description: error.to_string(),
-        detail: None,
-        cause: None,
-    })
+from_error! {
+    io::Error,
+    net::AddrParseError,
 }
 
 macro_rules! bail {
     ($($fmt:tt)*) => (
-        return Err(::error::bail(&format_args!($($fmt)*)))
+        #[cfg_attr(feature = "cargo-clippy", allow(useless_format))]
+        return Err(::error::TunnelError::new(&format!($($fmt)*)))
     )
 }

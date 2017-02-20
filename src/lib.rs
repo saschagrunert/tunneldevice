@@ -1,69 +1,93 @@
-//! Creates a TAP tunnel device
+//! Basic tunnel device handling in Rust
+
+#[macro_use]
+extern crate tokio_core;
+extern crate futures;
 
 #[macro_use]
 pub mod error;
 mod bindgen;
+mod device;
 
-use std::io::{Read, Write};
-use std::fs::{File, OpenOptions};
-use std::os::unix::io::AsRawFd;
+use device::Device;
+use error::TunnelResult;
 
-use bindgen::*;
-use error::DeviceResult;
+use std::io;
+use std::net::SocketAddr;
 
-#[derive(Debug)]
-/// A certain device
-pub struct Device {
-    /// The interface name
-    pub name: String,
+use futures::{Future, Poll};
+use tokio_core::net::UdpSocket;
+use tokio_core::reactor::Handle;
 
-    /// The tunnel device file descriptor
-    pub fd: File,
+/// The main tunnel structure
+pub struct Tunnel {
+    /// A tunneling TAP device
+    device: Device,
+
+    /// The VPN server socket
+    server: UdpSocket,
+
+    /// An internal packet buffer
+    buffer: Vec<u8>,
+
+    /// Things to send
+    to_send: Option<(usize, SocketAddr)>,
 }
 
-impl Device {
-    /// Create a new tunneling `Device`
-    pub fn new(name: &str) -> DeviceResult<Self> {
-        // Get a file descriptor to the operating system
-        let fd = OpenOptions::new().read(true).write(true).open("/dev/net/tun")?;
+impl Tunnel {
+    /// Creates a new `Tunnel`
+    pub fn new(handle: &Handle) -> TunnelResult<Self> {
+        // Create a tunneling device
+        let device = Device::new("tun.rs")?;
 
-        // Get the default interface options
-        let mut ifr = ifreq::new();
+        // Create a server for the tunnel
+        let addr = "127.0.0.1:8080".to_owned().parse()?;
+        let server = UdpSocket::bind(&addr, handle)?;
 
-        {
-            // Set the interface name
-            let ifr_name = unsafe { ifr.ifr_ifrn.ifrn_name.as_mut() };
-            for (index, character) in name.as_bytes().iter().enumerate() {
-                if index >= IFNAMSIZ as usize - 1 {
-                    bail!("Interface name too long.");
-                }
-                ifr_name[index] = *character as i8;
-            }
-
-            // Set the interface flags
-            let ifr_flags = unsafe { ifr.ifr_ifru.ifru_flags.as_mut() };
-            *ifr_flags = (IFF_TAP | IFF_NO_PI) as i16;
-        }
-
-        // Create the tunnel device
-        if unsafe { ioctl(fd.as_raw_fd(), TUNSETIFF, &ifr) < 0 } {
-            bail!("Device creation failed.");
-        }
-
-        Ok(Device {
-            name: name.to_owned(),
-            fd: fd,
+        Ok(Tunnel {
+            device: device,
+            server: server,
+            buffer: vec![0; 1500],
+            to_send: None,
         })
     }
+}
 
-    /// Reads a frame from the device, returns the number of bytes read
-    pub fn read(&mut self, mut buffer: &mut [u8]) -> DeviceResult<usize> {
-        Ok(self.fd.read(&mut buffer)?)
-    }
+impl Future for Tunnel {
+    type Item = ();
+    type Error = io::Error;
 
-    /// Write a frame to the device
-    pub fn write(&mut self, data: &[u8]) -> DeviceResult<()> {
-        self.fd.write_all(data)?;
-        Ok(self.fd.flush()?)
+    fn poll(&mut self) -> Poll<(), io::Error> {
+        loop {
+            // Check first if a message needs to be processed
+            if let Some((size, peer)) = self.to_send {
+                // Write the message to the tunnel device
+                // self.device.write(&self.buffer[..size]);
+
+                // Echo the message back for testing
+                let bytes = try_nb!(self.server.send_to(&self.buffer[..size], &peer));
+
+                // Set `to_send` to `None` if done
+                self.to_send = None;
+                println!("Wrote {}/{} bytes from {} to tunnel device.", bytes, size, peer);
+            }
+
+            // If `to_send` is `None`, we can receive the next message from the client
+            self.to_send = Some(try_nb!(self.server.recv_from(&mut self.buffer)));
+            // self.device.read(&mut self.buffer);
+        }
     }
+}
+
+#[test]
+fn tunnel() {
+    use tokio_core::reactor::Core;
+
+    // Setup tokio
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+
+    // Run the core with the tunnel
+    let tunnel = Tunnel::new(&handle).unwrap();
+    core.run(tunnel).unwrap();
 }
