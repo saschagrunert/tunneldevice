@@ -1,4 +1,5 @@
 //! Creates a TAP tunnel device
+use std::path::PathBuf;
 use std::io::{Read, Write};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
@@ -20,7 +21,7 @@ impl Device {
     /// Create a new tunneling `Device`
     pub fn new(name: &str) -> TunnelResult<Self> {
         // Get a file descriptor to the operating system
-        let fd = OpenOptions::new().read(true).write(true).open("/dev/net/tun")?;
+        let fd = OpenOptions::new().read(true).write(true).open("/tmp/some_dev")?;
 
         // Get the default interface options
         let mut ifr = ifreq::new();
@@ -51,14 +52,30 @@ impl Device {
         })
     }
 
+    /// Create a dummy device for testing
+    pub fn dummy(name: &str) -> TunnelResult<Self> {
+        let fd = OpenOptions::new().read(true)
+            .write(true)
+            .create(true)
+            .open(PathBuf::from("/tmp").join(name))?;
+        Ok(Device {
+            name: name.to_owned(),
+            fd: fd,
+        })
+    }
+
     /// Reads a frame from the device, returns the number of bytes read
     pub fn read(&mut self, mut buffer: &mut [u8]) -> TunnelResult<usize> {
         Ok(self.fd.read(&mut buffer)?)
     }
 
     /// Write a frame to the device
-    pub fn write(&mut self, data: &[u8]) -> TunnelResult<()> {
-        self.fd.write_all(data)?;
+    pub fn write(&mut self, data: &[u8]) -> TunnelResult<usize> {
+        Ok(self.fd.write(data)?)
+    }
+
+    /// Flush the device
+    pub fn flush(&mut self) -> TunnelResult<()> {
         Ok(self.fd.flush()?)
     }
 }

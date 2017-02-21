@@ -6,8 +6,8 @@ extern crate futures;
 
 #[macro_use]
 pub mod error;
+pub mod device;
 mod bindgen;
-mod device;
 
 use device::Device;
 use error::TunnelResult;
@@ -38,7 +38,7 @@ impl Tunnel {
     /// Creates a new `Tunnel`
     pub fn new(handle: &Handle) -> TunnelResult<Self> {
         // Create a tunneling device
-        let device = Device::new("tun.rs")?;
+        let device = Device::dummy("tun.rs")?;
 
         // Create a server for the tunnel
         let addr = "127.0.0.1:8080".to_owned().parse()?;
@@ -62,19 +62,24 @@ impl Future for Tunnel {
             // Check first if a message needs to be processed
             if let Some((size, peer)) = self.to_send {
                 // Write the message to the tunnel device
-                // self.device.write(&self.buffer[..size]);
-
-                // Echo the message back for testing
-                let bytes = try_nb!(self.server.send_to(&self.buffer[..size], &peer));
+                let send_bytes = try_nb!(self.device.write(&self.buffer[..size]));
 
                 // Set `to_send` to `None` if done
                 self.to_send = None;
-                println!("Wrote {}/{} bytes from {} to tunnel device.", bytes, size, peer);
+
+                println!("Wrote {}/{} bytes from {} to tunnel device", send_bytes, size, peer);
             }
 
             // If `to_send` is `None`, we can receive the next message from the client
             self.to_send = Some(try_nb!(self.server.recv_from(&mut self.buffer)));
-            // self.device.read(&mut self.buffer);
+
+            // Flush the device file descriptor
+            try_nb!(self.device.flush());
+
+            // Read from the tunnel device and write to the client
+            let read_bytes = try_nb!(self.device.read(&mut self.buffer));
+            let amt = try_nb!(self.server.send_to(&self.buffer[..read_bytes], &peer));
+            println!("Read {} bytes from tunnel device", read_bytes);
         }
     }
 }
